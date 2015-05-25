@@ -1,0 +1,189 @@
+#!/bin/bash
+
+if [[ $_ != $0 ]]; then
+  SUBSCRIPT=true
+fi
+
+# Default Values
+DEFAULT_HOST="127.0.0.1"
+DEFAULT_PORT="3306"
+DEFAULT_BACKUP_DIR=$(pwd -P)
+
+# Detect Platform
+PLATFORM='unknown'
+UNAMESTR=$(uname)
+if [[ "${UNAMESTR}" == 'Linux' ]]; then
+   PLATFORM='linux'
+elif [[ "${UNAMESTR}" == 'FreeBSD' ]]; then
+   PLATFORM='freebsd'
+elif [[ "${UNAMESTR}" == 'Darwin' ]]; then
+   PLATFORM='darwin'
+fi
+
+# Display Usage
+usage()
+{
+cat <<EOF
+usage: $0 options
+
+This script is used to backup a database
+OPTIONS:
+  -l  Read this path from the login file.
+
+  -A  Dump all the databases.
+
+  -h  Connect to host. DEFAULT: ${DEFAULT_HOST}
+
+  -p  Password to use when connecting to server. If password is
+      not given it's solicited on the tty.
+
+  -P  Port number to use for connection. DEFAULT: ${DEFAULT_PORT}
+
+  -u  User for login if not current user.
+
+  -c  Configuration file
+
+  -d  Local directory to save backup files
+EOF
+}
+
+mysql_databases()
+{
+  MYSQL_DATABASES=`mysql -e "SHOW DATABASES;" | tr -d "| " | grep -v "\(Database\|information_schema\|performance_schema\|mysql\|test\)"`
+}
+
+generate_timestamp()
+{
+  TIMESTAMP=$(date +'%y%m%d%H%M%S')
+}
+
+purge_30_days()
+{
+
+  if [[ ${PLATFORM} == 'linux' ]]; then
+    local TWENTY_FOUR_HOURS_AGO=$(date --date="23 hours ago" +"%Y-%m-%d %H:%M")
+    local TWENTY_FOUR_HOURS_AGO_SECONDS=$(date --date="${TWENTY_FOUR_HOURS_AGO}" +"%s")
+  else
+    local TWENTY_FOUR_HOURS_AGO=$(date -j -v-24h +"%s")
+  fi
+
+  for i in {1..30}
+  do
+    local v=$(expr $i - 1)
+
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      local FROM=$(date --date="${i}days ago" +"%C%y-%m-%d 00:00")
+      local TO=$(date --date="${v}days ago" +"%C%y-%m-%d 00:00")
+      local TO_SECONDS=$(date --date="${TO}" +"%s")
+    else
+     local FROM=$(date -j -v-${i}d +"%Y-%m-%d %H:%M")
+     local TO=$(date -j -v-${v}d +"%Y-%m-%d %H:%M")
+     local TO_SECONDS=$(date -j -v-${TO} +"%s")
+    fi
+
+    if [[ ${TO_SECONDS} -gt $TWENTY_FOUR_HOURS_AGO_SECONDS ]]
+    then
+      TO=${TWENTY_FOUR_HOURS_AGO}
+    fi
+
+    # Read files in day range into an array
+    unset FILES
+    declare -a FILES
+    while read -d '' -r
+    do
+      FILES+=("${REPLY#./}")
+    done < <(/usr/bin/find "${BACKUP_DIR}" -type f -newermt "${FROM}" ! -newermt "${TO}" -print0)
+
+    # Sort the array
+    readarray -t SORTED < <(printf '%s\0' "${FILES[@]}" | sort -z | xargs -0n1)
+
+    # Save the latest backup for the day
+    local LENGTH=${#SORTED[@]}
+    if [ ${LENGTH} -gt 1 ]
+    then
+      /bin/rm ${SORTED[@]:0:${LENGTH}-1}
+    fi
+  done
+}
+
+backup_mysql()
+{
+  local TMPDIR=$(mktemp -t dbackup-XXX -d)
+
+  # Loop the databases
+  for DATABASE in $MYSQL_DATABASES; do
+
+    # Define our filenames
+    local FILENAME="${TMPDIR}/${TIMESTAMP}-${DATABASE}.sql.gz"
+
+    # Dump and zip
+    mysqldump --tz-utc --force --opt --databases "$DATABASE" | gzip -c > "${FILENAME}"
+
+    [[ -d ${BACKUP_DIR} ]] && /bin/mv ${FILENAME} ${BACKUP_DIR}
+  done;
+
+  /bin/rm -rf ${TMPDIR}
+}
+
+# perform_backup()
+# {
+#   # --tz-utc --force
+# }
+#
+
+# Stop if sourced
+if [[ "$SUBSCRIPT" ]]; then
+  return
+fi
+
+while getopts "l:h:p:P:u:d:" OPTION
+do
+  case $OPTION in
+    l)
+      MYSQL_LOGIN_PATH=$OPTARG
+      ;;
+    h)
+      MYSQL_HOST=$OPTARG
+      ;;
+    p)
+      MYSQL_PASSWORD=$OPTARG
+      ;;
+    P)
+      MYSQL_PORT=$OPTARG
+      ;;
+    u)
+      MYSQL_USER=$OPTARG
+      ;;
+    d)
+      BACKUP_DIR=$OPTARG
+      ;;
+    ?)
+      usage
+      exit
+      ;;
+  esac
+done
+
+# Require LOGIN_PATH or USER and PASSWORD
+# if ! ([[ ! -z $LOGIN_PATH ]] || ([[ ! -z $USER ]] && [[ ! -z $PASSWORD ]]))
+# then
+#   usage
+#   exit 1
+# fi
+
+# Require DUMP_ALL or DATABASE
+# if ! ([[ ! -z $BACKUP_DIR ]])
+# then
+#   usage
+#   exit 1
+# fi
+
+# Assign default values if not set
+[[ -z $HOST ]] && HOST=$DEFAULT_HOST
+[[ -z $PORT ]] && PORT=$DEFAULT_PORT
+[[ -z $BACKUP_DIR ]] && BACKUP_DIR=$DEFAULT_BACKUP_DIR
+
+generate_timestamp
+mysql_databases
+backup_mysql
+purge_30_days
