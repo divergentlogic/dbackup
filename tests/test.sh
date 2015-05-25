@@ -7,7 +7,7 @@ YELLOW="\033[0;33m"
 CYAN="\033[0;36m"
 
 ROOTDIR=$(pwd -P)
-source ${ROOTDIR}/bin/dbackup
+source "${ROOTDIR}/bin/dbackup"
 
 ################################################################################
 # Test Framework
@@ -89,69 +89,6 @@ create_backup_dir()
   BACKUP_DIR=$(mktemp -t dbackup_test-XXX -d)
 }
 
-create_hourly_backups()
-{
-  create_backup_dir
-
-  # Create hourly backups
-  for i in {0..24}
-  do
-    # BSD / OS X
-    local TIMESTAMP=$(date -j -v-${i}H +"%C%y%m%d%H%M")
-    # Linux
-    # TIMESTAMP=${date --date="${i}days ago" +"%C%y%m%d%H%M"}
-    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
-  done
-}
-
-create_daily_backups()
-{
-  create_backup_dir
-
-  # Create daily backups
-  for i in {2..32}
-  do
-    # BSD / OS X
-    local TIMESTAMP=$(date -j -v-${i}d +"%C%y%m%d%H%M")
-    # Linux
-    # TIMESTAMP=${date --date="${i}days ago" +"%C%y%m%d%H%M"}
-
-    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
-  done
-}
-
-create_weakly_backups()
-{
-  create_backup_dir
-
-  # Create weekly backups
-  for i in {5..16}
-  do
-    # BSD / OS X
-    local TIMESTAMP=$(date -j -v-${i}w +"%C%y%m%d%H%M")
-    # Linux
-    # TIMESTAMP=${date --date="${i}days ago" +"%C%y%m%d%H%M"}
-
-    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
-  done
-}
-
-create_monthly_backups()
-{
-  create_backup_dir
-
-  # Create monthly backups
-  for i in {4..5}
-  do
-    # BSD / OS X
-    local TIMESTAMP=$(date -j -v-${i}m +"%C%y%m%d%H%M")
-    # Linux
-    # TIMESTAMP=${date --date="${i}days ago" +"%C%y%m%d%H%M"}
-
-    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
-  done
-}
-
 ################################################################################
 # Tests
 ################################################################################
@@ -226,11 +163,8 @@ should_have_timestamp_on_backup_files_if_variable_is_set()
   assert_equal $(basename ${BACKUP_DIR}/*.sql.gz) "time-backup_test.sql.gz"
 }
 
-
-
 should_keep_1_backup_a_day_for_the_last_30_days()
 {
-
   create_backup_dir
 
   # Create 31 days of hourly backups
@@ -239,7 +173,7 @@ should_keep_1_backup_a_day_for_the_last_30_days()
     if [[ ${PLATFORM} == 'linux' ]]; then
       local TIMESTAMP=$(date --date="${i} hours ago" +"%C%y%m%d%H%M")
     else
-      local TIMESTAMP=$(date -j -v-${i}h +"%C%y%m%d%H%M")
+      local TIMESTAMP=$(date -j -v-"${i}H" +"%C%y%m%d%H%M")
     fi
     touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
   done
@@ -252,7 +186,7 @@ should_keep_1_backup_a_day_for_the_last_30_days()
     local TO=$(date --date="23 hours ago" +"%C%y-%m-%d %H:%M")
   else
     local FROM=$(date -j -v-30d +"%Y-%m-%d %H:%M")
-    local TO=$(date -j -v-0d +"%Y-%m-%d %H:%M")
+    local TO=$(date -j -v-23H +"%Y-%m-%d %H:%M")
   fi
   local ACTUAL=$(/usr/bin/find "${BACKUP_DIR}" -type f -newermt "${FROM}" ! -newermt "${TO}" | wc -l)
 
@@ -262,13 +196,14 @@ should_keep_1_backup_a_day_for_the_last_30_days()
 should_keep_all_backups_created_in_the_last_24_hours()
 {
   create_backup_dir
-# Create 31 days of hourly backups
+
+  # Create 2 days of hourly backups
   for i in {0..48}
   do
     if [[ ${PLATFORM} == 'linux' ]]; then
       local TIMESTAMP=$(date --date="${i} hours ago" +"%C%y%m%d%H%M")
     else
-      local TIMESTAMP=$(date -j -v-${i}h +"%C%y%m%d%H%M")
+      local TIMESTAMP=$(date -j -v-${i}H +"%C%y%m%d%H%M")
     fi
     touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
   done
@@ -279,20 +214,63 @@ should_keep_all_backups_created_in_the_last_24_hours()
   if [[ ${PLATFORM} == 'linux' ]]; then
     local FROM=$(date --date="24 hours ago" +"%C%y-%m-%d %H:%M")
   else
-    local FROM=$(date -j -v-30d +"%Y-%m-%d %H:%M")
+    local FROM=$(date -j -v-24H +"%Y-%m-%d %H:%M")
   fi
   local ACTUAL=$(/usr/bin/find "${BACKUP_DIR}" -type f -newermt "${FROM}" | wc -l)
 
   assert_equal ${ACTUAL} 24
 }
 
-# should_keep_1_backup_a_week_for_the_last_90_days()
-# {
-# }
-#
-# should_keep_1_monthly_backup_until_free_space_is_greater_than_90_percent()
-# {
-# }
+should_keep_1_backup_a_week_after_30_days()
+{
+  create_backup_dir
+
+  # Create 356 days of backups
+  for i in {0..365}
+  do
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      local TIMESTAMP=$(date --date="${i} days ago" +"%C%y%m%d%H%M")
+    else
+      local TIMESTAMP=$(date -j -v-"${i}d" +"%C%y%m%d%H%M")
+    fi
+    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
+  done
+
+  purge_weekly
+
+  # Count the number of files last left. Not including the current day or any files after 30 days.
+  if [[ ${PLATFORM} == 'linux' ]]; then
+    local TO=$(date --date="29 days ago" +"%C%y-%m-%d 00:00")
+  else
+    local TO=$(date -j -v-29d +"%Y-%m-%d 00:00")
+  fi
+  local ACTUAL=$(/usr/bin/find "${BACKUP_DIR}" -type f ! -newermt "${TO}" | wc -l)
+
+  # (365 days - 30 days) / 7 days = 47.85 backups
+  assert_equal ${ACTUAL} 47
+}
+
+should_delete_any_backup_older_then_a_year()
+{
+  create_backup_dir
+
+  # Create 356 days of backups
+  for i in {1..2}
+  do
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      local TIMESTAMP=$(date --date="${i} years ago" +"%C%y%m%d%H%M")
+    else
+      local TIMESTAMP=$(date -j -v-"${i}y" +"%C%y%m%d%H%M")
+    fi
+    touch -t "${TIMESTAMP}" "${BACKUP_DIR}/${TIMESTAMP}-backup_test.sql.gz"
+  done
+  set +x
+
+  purge_weekly
+
+  local ACTUAL=$(/usr/bin/find "${BACKUP_DIR}" -type f | wc -l)
+  assert_equal ${ACTUAL} 0
+}
 
 before_once
 run should_display_usage_dialog
@@ -302,4 +280,6 @@ run should_create_mysql_backup_files
 run should_have_timestamp_on_backup_files_if_variable_is_set
 run should_keep_1_backup_a_day_for_the_last_30_days
 run should_keep_all_backups_created_in_the_last_24_hours
+run should_keep_1_backup_a_week_after_30_days
+run should_delete_any_backup_older_then_a_year
 after_once

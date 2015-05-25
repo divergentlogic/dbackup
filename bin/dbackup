@@ -59,12 +59,12 @@ generate_timestamp()
 
 purge_30_days()
 {
-
   if [[ ${PLATFORM} == 'linux' ]]; then
     local TWENTY_FOUR_HOURS_AGO=$(date --date="23 hours ago" +"%Y-%m-%d %H:%M")
     local TWENTY_FOUR_HOURS_AGO_SECONDS=$(date --date="${TWENTY_FOUR_HOURS_AGO}" +"%s")
   else
-    local TWENTY_FOUR_HOURS_AGO=$(date -j -v-24h +"%s")
+    local TWENTY_FOUR_HOURS_AGO=$(date -j -v-23H +"%Y-%m-%d %H:%M")
+    local TWENTY_FOUR_HOURS_AGO_SECONDS=$(date -jf "%Y-%m-%d %H:%M" "${TWENTY_FOUR_HOURS_AGO}" +"%s")
   fi
 
   for i in {1..30}
@@ -76,9 +76,9 @@ purge_30_days()
       local TO=$(date --date="${v}days ago" +"%C%y-%m-%d 00:00")
       local TO_SECONDS=$(date --date="${TO}" +"%s")
     else
-     local FROM=$(date -j -v-${i}d +"%Y-%m-%d %H:%M")
-     local TO=$(date -j -v-${v}d +"%Y-%m-%d %H:%M")
-     local TO_SECONDS=$(date -j -v-${TO} +"%s")
+     local FROM=$(date -j -v-${i}d +"%Y-%m-%d 00:00")
+     local TO=$(date -j -v-${v}d +"%Y-%m-%d 00:00")
+     local TO_SECONDS=$(date -jf "%Y-%m-%d %H:%M" "${TO}" +%s)
     fi
 
     if [[ ${TO_SECONDS} -gt $TWENTY_FOUR_HOURS_AGO_SECONDS ]]
@@ -94,8 +94,77 @@ purge_30_days()
       FILES+=("${REPLY#./}")
     done < <(/usr/bin/find "${BACKUP_DIR}" -type f -newermt "${FROM}" ! -newermt "${TO}" -print0)
 
-    # Sort the array
-    readarray -t SORTED < <(printf '%s\0' "${FILES[@]}" | sort -z | xargs -0n1)
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      # Sort the array
+      readarray -t SORTED < <(printf '%s\0' "${FILES[@]}" | sort -z | xargs -0n1)
+    else
+      unset SORTED
+      declare -a SORTED
+      while IFS=\= read var ; do SORTED+=($var); done < <(printf '%s\0' ${FILES[@]} | sort -z | xargs -0n1)
+    fi
+
+    # Save the latest backup for the day
+    local LENGTH=${#SORTED[@]}
+    if [ ${LENGTH} -gt 1 ]
+    then
+      /bin/rm ${SORTED[@]:0:${LENGTH}-1}
+    fi
+  done
+}
+
+purge_weekly()
+{
+
+  # Removing backups older then a year
+  if [[ ${PLATFORM} == 'linux' ]]; then
+    /usr/bin/find ${BACKUP_DIR} -type f ! -newermt "$(date --date="364 days ago" +"%C%y-%m-%d 00:00")" -delete
+  else
+    /usr/bin/find ${BACKUP_DIR} -type f ! -newermt "$(date -j -v-364d +"%C%y-%m-%d 00:00")" -delete
+  fi
+
+  if [[ ${PLATFORM} == 'linux' ]]; then
+    local THIRTY_DAYS=$(date --date="4 weeks ago" +"%Y-%m-%d %H:%M")
+    local THIRTY_DAYS_S=$(date --date="${THIRTY_DAYS}" +"%s")
+  else
+    local THIRTY_DAYS=$(date -j -v-4w +"%Y-%m-%d %H:%M")
+    local THIRTY_DAYS_S=$(date -jf "%Y-%m-%d %H:%M" "${THIRTY_DAYS}" +"%s")
+  fi
+
+  for i in {4..56}
+  do
+    local v=$(expr $i - 1)
+
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      local FROM=$(date --date="${i} weeks ago" +"%C%y-%m-%d 00:00")
+      local TO=$(date --date="${v} weeks ago" +"%C%y-%m-%d 00:00")
+      local TO_S=$(date --date="${TO}" +"%s")
+    else
+     local FROM=$(date -j -v-${i}w +"%Y-%m-%d 00:00")
+     local TO=$(date -j -v-${v}w +"%Y-%m-%d 00:00")
+     local TO_S=$(date -jf "%Y-%m-%d %H:%M" "${TO}" +%s)
+    fi
+
+    if [[ ${TO_S} -gt $THIRTY_DAYS_S ]]
+    then
+      TO=${THIRTY_DAYS}
+    fi
+
+    # Read files in day range into an array
+    unset FILES
+    declare -a FILES
+    while read -d '' -r
+    do
+      FILES+=("${REPLY#./}")
+    done < <(/usr/bin/find "${BACKUP_DIR}" -type f -newermt "${FROM}" ! -newermt "${TO}" -print0)
+
+    if [[ ${PLATFORM} == 'linux' ]]; then
+      # Sort the array
+      readarray -t SORTED < <(printf '%s\0' "${FILES[@]}" | sort -z | xargs -0n1)
+    else
+      unset SORTED
+      declare -a SORTED
+      while IFS=\= read var ; do SORTED+=($var); done < <(printf '%s\0' ${FILES[@]} | sort -z | xargs -0n1)
+    fi
 
     # Save the latest backup for the day
     local LENGTH=${#SORTED[@]}
@@ -187,3 +256,4 @@ generate_timestamp
 mysql_databases
 backup_mysql
 purge_30_days
+purge_weekly
